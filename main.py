@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
-from fastapi import FastAPI
 from typing import List, Dict
+from fastapi import FastAPI
 import openrouteservice
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
@@ -13,11 +13,8 @@ zip_cache = {}
 def geocode_zip(zipcode: str):
     if zipcode in zip_cache:
         return zip_cache[zipcode]
-
     try:
         result = ors.pelias_search(text=zipcode, size=1)
-        if not result['features']:
-            raise ValueError(f"No coordinates found for {zipcode}")
         coords = result['features'][0]['geometry']['coordinates']
         zip_cache[zipcode] = coords
         return coords
@@ -33,23 +30,24 @@ def tijd_in_seconden(start: str, stop: str):
 
 @app.post("/optimize")
 def optimize(payload: Dict):
-    delivery_date = payload.get("delivery_date")
-    orders = payload.get("orders", [])
-    drivers = payload.get("drivers", [])
+    delivery_date = payload["delivery_date"]
+    orders = payload["orders"]
+    drivers = payload["drivers"]
 
     results = []
     failed_geocodes_all = []
 
     for driver in drivers:
-        if driver.get("delivery_date") != delivery_date:
+        if driver["delivery_date"] != delivery_date:
             continue
 
-        relevant_orders = [o for o in orders if o.get("delivery_date") == delivery_date]
+        relevant_orders = [o for o in orders if o["delivery_date"] == delivery_date]
         print(f"✅ Driver {driver['driver_id']} heeft {len(relevant_orders)} relevante orders")
+
         if not relevant_orders:
             continue
 
-        all_zipcodes = [driver.get("start_zipcode")] + [o.get("zipcode") for o in relevant_orders] + [driver.get("end_zipcode")]
+        all_zipcodes = [driver["start_zipcode"]] + [o["zipcode"] for o in relevant_orders] + [driver["end_zipcode"]]
         locations = []
         failed_geocodes = []
 
@@ -60,16 +58,11 @@ def optimize(payload: Dict):
             else:
                 failed_geocodes.append(zipcode)
 
-        if failed_geocodes:
+        if failed_geocodes or len(locations) < 2:
             print(f"❌ Geocoding is mislukt voor: {failed_geocodes}")
             failed_geocodes_all.extend(failed_geocodes)
             continue
 
-        if len(locations) < 2:
-            print(f"❌ Niet genoeg locaties na geocoding voor driver {driver['driver_id']}: {locations}")
-            failed_geocodes_all.extend(all_zipcodes)
-            continue
-            
         try:
             matrix = ors.distance_matrix(locations, profile="driving-car", metrics=["duration"], resolve_locations=True)
             duration_matrix = matrix["durations"]
@@ -77,7 +70,7 @@ def optimize(payload: Dict):
             print(f"ORS matrix error: {e}")
             continue
 
-        service_times = [0] + [o.get("service_time", 0) * 60 for o in relevant_orders] + [0]
+        service_times = [0] + [o["service_time"] * 60 for o in relevant_orders] + [0]
 
         manager = pywrapcp.RoutingIndexManager(len(duration_matrix), 1, 0, len(duration_matrix) - 1)
         routing = pywrapcp.RoutingModel(manager)
@@ -93,7 +86,7 @@ def optimize(payload: Dict):
         routing.AddDimension(
             transit_callback_index,
             0,
-            tijd_in_seconden(driver.get("start_time", "00:00"), driver.get("stop_time", "23:59")),
+            tijd_in_seconden(driver["start_time"], driver["stop_time"]),
             True,
             "Time"
         )
@@ -131,6 +124,3 @@ def optimize(payload: Dict):
         "results": results,
         "failed_geocodes": list(set(failed_geocodes_all))
     }
-
-print("✅ Geocode locaties:", locations)
-
