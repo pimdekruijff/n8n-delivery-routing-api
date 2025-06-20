@@ -65,6 +65,11 @@ def optimize(payload: Dict):
             failed_geocodes_all.extend(failed_geocodes)
             continue
 
+        if len(locations) < 2:
+            print(f"❌ Niet genoeg locaties na geocoding voor driver {driver['driver_id']}: {locations}")
+            failed_geocodes_all.extend(all_zipcodes)
+            continue
+            
         try:
             matrix = ors.distance_matrix(locations, profile="driving-car", metrics=["duration"], resolve_locations=True)
             duration_matrix = matrix["durations"]
@@ -126,3 +131,6 @@ def optimize(payload: Dict):
         "results": results,
         "failed_geocodes": list(set(failed_geocodes_all))
     }
+
+print("✅ Geocode locaties:", locations)
+
