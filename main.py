@@ -1,21 +1,21 @@
 import openrouteservice
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from fastapi import FastAPI
-from typing import List, Dict
+from typing import Dict
+from datetime import datetime
+import os
 
 app = FastAPI()
-ors = openrouteservice.Client(key="5b3ce3597851110001cf6248399c7733d0464627b9b6710c1a379a74")
 
-locations = [geocode_zip(z) for z in all_postcodes]
-if None in locations:
-    return {"error": "One or more postcodes could not be geocoded."}
+# ORS client
+ors = openrouteservice.Client(key=os.getenv("ORS_API_KEY"))  # Zet ORS_API_KEY in Railway!
 
+# Cache
 zip_cache = {}
 
 def geocode_zip(zipcode: str):
     if zipcode in zip_cache:
         return zip_cache[zipcode]
-
     try:
         result = ors.pelias_search(text=zipcode, size=1)
         coords = result['features'][0]['geometry']['coordinates']
@@ -24,6 +24,12 @@ def geocode_zip(zipcode: str):
     except Exception as e:
         print(f"Geocode error for {zipcode}: {e}")
         return None
+
+def tijd_in_seconden(start: str, stop: str) -> int:
+    fmt = "%H:%M"
+    t1 = datetime.strptime(start, fmt)
+    t2 = datetime.strptime(stop, fmt)
+    return int((t2 - t1).total_seconds())
 
 @app.post("/optimize")
 def optimize(payload: Dict):
@@ -34,23 +40,25 @@ def optimize(payload: Dict):
     results = []
 
     for driver in drivers:
+        if driver["delivery_date"] != delivery_date:
+            continue
+
         relevant_orders = [o for o in orders if o["delivery_date"] == delivery_date]
 
         if not relevant_orders:
             continue
 
-        # ⬇️ 1. Adressen → coördinaten (geocode zelf of meegegeven)
         all_coords = [driver["start_zipcode"]] + [o["zipcode"] for o in relevant_orders] + [driver["end_zipcode"]]
-        locations = [geocode_zip(zipcode) for zipcode in all_coords]  # eigen geocode functie
+        locations = [geocode_zip(zipcode) for zipcode in all_coords]
 
-        # ⬇️ 2. ORS: haal tijdmatrix op
+        if None in locations:
+            print("❌ Minstens één postcode kon niet worden omgezet.")
+            continue
+
         matrix = ors.distance_matrix(locations, profile="driving-car", metrics=["duration"], resolve_locations=True)
         duration_matrix = matrix["durations"]
-
-        # ⬇️ 3. Service time (in seconden)
         service_times = [0] + [o["service_time"] * 60 for o in relevant_orders] + [0]
 
-        # ⬇️ 4. OR-Tools setup
         manager = pywrapcp.RoutingIndexManager(len(duration_matrix), 1, 0, len(duration_matrix) - 1)
         routing = pywrapcp.RoutingModel(manager)
 
@@ -70,7 +78,6 @@ def optimize(payload: Dict):
             "Time"
         )
 
-        # ⬇️ 5. Solve
         search_params = pywrapcp.DefaultRoutingSearchParameters()
         search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
         solution = routing.SolveWithParameters(search_params)
@@ -78,7 +85,6 @@ def optimize(payload: Dict):
         if not solution:
             continue
 
-        # ⬇️ 6. Bouw route
         index = routing.Start(0)
         route = []
         total_time = 0
