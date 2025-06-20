@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from typing import List, Dict
 
 app = FastAPI()
-ors = openrouteservice.Client(key="YOUR_ORS_KEY")
+ors = openrouteservice.Client(key="5b3ce3597851110001cf6248399c7733d0464627b9b6710c1a379a74")
 
 @app.post("/optimize")
 def optimize(payload: Dict):
