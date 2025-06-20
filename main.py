@@ -6,6 +6,15 @@ from typing import List, Dict
 app = FastAPI()
 ors = openrouteservice.Client(key="5b3ce3597851110001cf6248399c7733d0464627b9b6710c1a379a74")
 
+def geocode_zip(zipcode: str):
+    try:
+        result = ors.pelias_search(text=zipcode, size=1)
+        coords = result['features'][0]['geometry']['coordinates']
+        return coords  # Let op: [lon, lat]
+    except Exception as e:
+        print(f"Geocode error for {zipcode}: {e}")
+        return None
+
 @app.post("/optimize")
 def optimize(payload: Dict):
     delivery_date = payload["delivery_date"]
