@@ -1,21 +1,19 @@
+
+import os
 import openrouteservice
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from fastapi import FastAPI
-from typing import Dict
-from datetime import datetime
-import os
+from typing import List, Dict
 
 app = FastAPI()
+ors = openrouteservice.Client(key=os.getenv("ORS_API_KEY"))
 
-# ORS client
-ors = openrouteservice.Client(key=os.getenv("ORS_API_KEY"))  # Zet ORS_API_KEY in Railway!
-
-# Cache
 zip_cache = {}
 
 def geocode_zip(zipcode: str):
     if zipcode in zip_cache:
         return zip_cache[zipcode]
+
     try:
         result = ors.pelias_search(text=zipcode, size=1)
         coords = result['features'][0]['geometry']['coordinates']
@@ -25,7 +23,8 @@ def geocode_zip(zipcode: str):
         print(f"Geocode error for {zipcode}: {e}")
         return None
 
-def tijd_in_seconden(start: str, stop: str) -> int:
+def tijd_in_seconden(start: str, stop: str):
+    from datetime import datetime
     fmt = "%H:%M"
     t1 = datetime.strptime(start, fmt)
     t2 = datetime.strptime(stop, fmt)
@@ -38,28 +37,43 @@ def optimize(payload: Dict):
     drivers = payload["drivers"]
 
     results = []
+    failed_geocodes = []
 
     for driver in drivers:
         if driver["delivery_date"] != delivery_date:
             print(f"❌ Driver {driver['driver_id']} heeft een andere datum: {driver['delivery_date']}")
             continue
-    
+
         relevant_orders = [o for o in orders if o["delivery_date"] == delivery_date]
         print(f"✅ Driver {driver['driver_id']} heeft {len(relevant_orders)} relevante orders")
-    
+
         if not relevant_orders:
             continue
-    
-        all_coords = [driver["start_zipcode"]] + [o["zipcode"] for o in relevant_orders] + [driver["end_zipcode"]]
-        locations = [geocode_zip(zipcode) for zipcode in all_coords]
-    
-        if None in locations:
-            print(f"❌ Geocoding is mislukt voor minstens 1 postcode: {all_coords}")
+
+        all_coords_zip = [driver["start_zipcode"]] + [o["zipcode"] for o in relevant_orders] + [driver["end_zipcode"]]
+        all_coords = []
+        failed_zips = []
+
+        for z in all_coords_zip:
+            coord = geocode_zip(z)
+            if coord is None:
+                failed_zips.append(z)
+            else:
+                all_coords.append(coord)
+
+        if len(all_coords) < 3:
+            print(f"❌ Niet genoeg geocode resultaten om route te berekenen voor driver {driver['driver_id']}")
+            failed_geocodes.extend(failed_zips)
             continue
 
-        matrix = ors.distance_matrix(locations, profile="driving-car", metrics=["duration"], resolve_locations=True)
-        duration_matrix = matrix["durations"]
-        service_times = [0] + [o["service_time"] * 60 for o in relevant_orders] + [0]
+        try:
+            matrix = ors.distance_matrix(all_coords, profile="driving-car", metrics=["duration"], resolve_locations=True)
+            duration_matrix = matrix["durations"]
+        except Exception as e:
+            print(f"❌ ORS distance_matrix error: {e}")
+            continue
+
+        service_times = [0] + [o["service_time"] * 60 for o in relevant_orders if o["zipcode"] not in failed_zips] + [0]
 
         manager = pywrapcp.RoutingIndexManager(len(duration_matrix), 1, 0, len(duration_matrix) - 1)
         routing = pywrapcp.RoutingModel(manager)
@@ -85,20 +99,22 @@ def optimize(payload: Dict):
         solution = routing.SolveWithParameters(search_params)
 
         if not solution:
+            print(f"❌ Geen oplossing gevonden voor driver {driver['driver_id']}")
             continue
 
         index = routing.Start(0)
         route = []
         total_time = 0
+        filtered_orders = [o for o in relevant_orders if o["zipcode"] not in failed_zips]
         while not routing.IsEnd(index):
             node_index = manager.IndexToNode(index)
-            if node_index != 0 and node_index != len(locations) - 1:
-                route.append(relevant_orders[node_index - 1]["order_id"])
+            if node_index != 0 and node_index != len(all_coords) - 1:
+                route.append(filtered_orders[node_index - 1]["order_id"])
             prev_index = index
             index = solution.Value(routing.NextVar(index))
             total_time += routing.GetArcCostForVehicle(prev_index, index, 0)
 
-        all_ids = [o["order_id"] for o in relevant_orders]
+        all_ids = [o["order_id"] for o in filtered_orders]
         left = [oid for oid in all_ids if oid not in route]
 
         results.append({
@@ -108,7 +124,10 @@ def optimize(payload: Dict):
             "total_time_min": total_time // 60
         })
 
+        failed_geocodes.extend(failed_zips)
+
     return {
         "delivery_date": delivery_date,
-        "results": results
+        "results": results,
+        "failed_geocodes": list(set(failed_geocodes))
     }
