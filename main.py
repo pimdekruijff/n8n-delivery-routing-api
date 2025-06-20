@@ -6,11 +6,21 @@ from typing import List, Dict
 app = FastAPI()
 ors = openrouteservice.Client(key="5b3ce3597851110001cf6248399c7733d0464627b9b6710c1a379a74")
 
+locations = [geocode_zip(z) for z in all_postcodes]
+if None in locations:
+    return {"error": "One or more postcodes could not be geocoded."}
+
+zip_cache = {}
+
 def geocode_zip(zipcode: str):
+    if zipcode in zip_cache:
+        return zip_cache[zipcode]
+
     try:
         result = ors.pelias_search(text=zipcode, size=1)
         coords = result['features'][0]['geometry']['coordinates']
-        return coords  # Let op: [lon, lat]
+        zip_cache[zipcode] = coords
+        return coords
     except Exception as e:
         print(f"Geocode error for {zipcode}: {e}")
         return None
