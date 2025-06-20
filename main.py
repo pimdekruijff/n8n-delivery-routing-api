@@ -125,3 +125,5 @@ def optimize(payload: Dict):
         "results": results,
         "failed_geocodes": list(set(failed_geocodes_all))
     }
+    print("ORS_API_KEY =", os.getenv("ORS_API_KEY"))
+
