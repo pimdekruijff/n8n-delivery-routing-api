@@ -41,18 +41,20 @@ def optimize(payload: Dict):
 
     for driver in drivers:
         if driver["delivery_date"] != delivery_date:
+            print(f"❌ Driver {driver['driver_id']} heeft een andere datum: {driver['delivery_date']}")
             continue
-
+    
         relevant_orders = [o for o in orders if o["delivery_date"] == delivery_date]
-
+        print(f"✅ Driver {driver['driver_id']} heeft {len(relevant_orders)} relevante orders")
+    
         if not relevant_orders:
             continue
-
+    
         all_coords = [driver["start_zipcode"]] + [o["zipcode"] for o in relevant_orders] + [driver["end_zipcode"]]
         locations = [geocode_zip(zipcode) for zipcode in all_coords]
-
+    
         if None in locations:
-            print("❌ Minstens één postcode kon niet worden omgezet.")
+            print(f"❌ Geocoding is mislukt voor minstens 1 postcode: {all_coords}")
             continue
 
         matrix = ors.distance_matrix(locations, profile="driving-car", metrics=["duration"], resolve_locations=True)
