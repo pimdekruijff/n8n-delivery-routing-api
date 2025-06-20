@@ -1,9 +1,9 @@
 import os
-from datetime import datetime
-from typing import List, Dict
-from fastapi import FastAPI
 import openrouteservice
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+from fastapi import FastAPI
+from typing import Dict
+from datetime import datetime
 
 app = FastAPI()
 ors = openrouteservice.Client(key=os.getenv("ORS_API_KEY"))
@@ -43,7 +43,6 @@ def optimize(payload: Dict):
 
         relevant_orders = [o for o in orders if o["delivery_date"] == delivery_date]
         print(f"✅ Driver {driver['driver_id']} heeft {len(relevant_orders)} relevante orders")
-
         if not relevant_orders:
             continue
 
@@ -58,7 +57,7 @@ def optimize(payload: Dict):
             else:
                 failed_geocodes.append(zipcode)
 
-        if failed_geocodes or len(locations) < 2:
+        if failed_geocodes:
             print(f"❌ Geocoding is mislukt voor: {failed_geocodes}")
             failed_geocodes_all.extend(failed_geocodes)
             continue
@@ -72,7 +71,13 @@ def optimize(payload: Dict):
 
         service_times = [0] + [o["service_time"] * 60 for o in relevant_orders] + [0]
 
-        manager = pywrapcp.RoutingIndexManager(len(duration_matrix), 1, 0, len(duration_matrix) - 1)
+        manager = pywrapcp.RoutingIndexManager(
+            len(duration_matrix),
+            1,
+            [0],  # start index
+            [len(duration_matrix) - 1]  # end index
+        )
+
         routing = pywrapcp.RoutingModel(manager)
 
         def time_callback(from_index, to_index):
